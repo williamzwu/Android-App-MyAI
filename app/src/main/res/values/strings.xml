@@ -16,4 +16,5 @@
     <string name="bluetooth">蓝牙</string>
     <string name="rotation">旋转</string>
     <string name="center">微信</string>
+    <string name="choice">选</string>
 </resources>

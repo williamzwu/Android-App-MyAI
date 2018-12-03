@@ -1,11 +1,17 @@
 package com.dynaxtech.william.myai;
 
 import android.app.Fragment;
+import android.content.Intent;
 import android.graphics.Point;
 import android.graphics.drawable.AnimationDrawable;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Bundle;
+import android.os.Parcel;
+import android.os.Parcelable;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.util.Log;
@@ -19,20 +25,19 @@ import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 
 public class MainActivity extends AppCompatActivity
-        implements NavigationView.OnNavigationItemSelectedListener, DownloadCallback {
+        implements NavigationView.OnNavigationItemSelectedListener, DownloadCallback, LocationListener {
 
     private static String SAVE_KEY_ACTIVE_ID = "activeComponents";
     private static String SAVE_KEY_ACTIVE_STATE = "activeStates";
+    private static String LOCATION_FILE_NAME = "location_list";
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -82,6 +87,23 @@ public class MainActivity extends AppCompatActivity
                     activeComponents.put(comps[k], states[k]);
             }
         }
+
+        AppIntent intent = new AppIntent( this, Intent.ACTION_SEND, "text/plain");
+        if( intent.hasNext() ) {
+            AppWriteFile locFile = new AppWriteFile(this.getApplicationContext(), LOCATION_FILE_NAME, "txt");
+            if (locFile.canWrite()) {
+                while (intent.hasNext()) {
+                    String t = intent.next();
+                    locFile.add(t);
+                }
+                intent.done();
+                locFile.done();
+            }
+        }
+        AppReadFile locFile = new AppReadFile(this.getApplicationContext(), LOCATION_FILE_NAME, "txt");
+        if( locFile.hasNext() )
+            locTarget = locFile.next();
+        locFile.done();
     }
 
     @Override
@@ -180,6 +202,7 @@ public class MainActivity extends AppCompatActivity
     private boolean mDownloading = false;
     private int requestingViewId;
     private int requestedNetworkType;
+    private String locTarget;
 
     @Override
     public void updateFromDownload(Object result) {
@@ -341,6 +364,248 @@ public class MainActivity extends AppCompatActivity
 */
     }
 
+    LocationManager locationManager;
+    static int distanceNear = 5000;
+    static int distanceVeryNear = 2000;
+    static int distanceApproaching = 30;
+    static int distanceArrival = 10;
+    static int [] distance = { distanceNear, distanceVeryNear, distanceApproaching, distanceArrival };
+    static int [] background = { R.color.colorFar, R.color.colorNear, R.color.colorVeryNear, R.color.colorArrival };
+    static int [] foreground = { R.color.colorPrimary, R.color.colorReverse, R.color.colorReverse, R.color.colorReverse };
+    static int [] minTime = { 60*1000, 10*1000, 2*1000, 500, 500 };
+    static int [] minDist = { 1000, 50, 20, 10 };
+    static int locStatus;
+
+    private void addLocation(String lati, String longti, String name )
+    {
+        AppReadFile locFile = new AppReadFile(this.getApplicationContext(), LOCATION_FILE_NAME, "txt");
+        AppWriteFile newLocFile = new AppWriteFile(this.getApplicationContext(), LOCATION_FILE_NAME, "txt");
+        int added = 0;
+        while( locFile.hasNext() )
+        {
+            String old = locFile.next();
+            String gps[] = old.split(",");
+            if( gps.length>2 && name.equalsIgnoreCase(gps[2]) )
+            {
+                // find the same name, replace
+                if( newLocFile.canWrite() )
+                    newLocFile.add( lati+","+longti+","+name);
+                added++;
+            } else
+                if( newLocFile.canWrite() )
+                    newLocFile.add( old );
+        }
+        locFile.done();
+        if( added==0 )
+            if( newLocFile.canWrite() )
+                newLocFile.add( lati+","+longti+","+name);
+        newLocFile.done();
+    }
+
+    private String getLocation( String n )
+    {
+        AppReadFile locFile = new AppReadFile(this.getApplicationContext(), LOCATION_FILE_NAME, "txt");
+        boolean isdigit = n.matches("^[0-9]+.*");
+        if( isdigit ) {
+            // by number of lines
+            int k = Integer.parseInt(n);
+            while( locFile.hasNext()) {
+                k--;
+                String x = locFile.next();
+                if( k==0 ) {
+                    locFile.done();
+                    return x;
+                }
+            }
+        } else {
+            while( locFile.hasNext()) {
+                String loc = locFile.next();
+                String gps[] = loc.split(",");
+                if( gps != null && gps.length>2 && gps[2].equalsIgnoreCase(n) ) {
+                    locFile.done();
+                    return loc;
+                }
+            }
+        }
+        // can't find, return the first one
+        locFile.done();
+        locFile.again();
+        if( locFile.hasNext() ) {
+            String x = locFile.next();
+            locFile.done();
+            return x;
+        }
+        // I don't have anything
+        return "40.773104,-74.318118,Swan";
+    }
+
+    private String locationTarget(EditText loctext)
+    {
+        String fromUI = loctext.getText().toString();
+        String [] gps = fromUI.split(",");
+//        return getLocation(gps[0]);
+/*
+        switch (gps.length)
+        {
+            case 4: // save the location specified by the first 3 text
+                double lati = Double.parseDouble(gps[0]);
+                double longti = Double.parseDouble(gps[1]);
+                if( lati != 0 && longti != 0 && gps[2].matches("^[a-zA-Z]+.*")) // validated
+                    addLocation( gps[0], gps[1], gps[2] );
+                return gps[0]+","+gps[1]+","+gps[2];
+            case 1: // line in the file
+                return getLocation(gps[0]);
+            case 2: // just use the location
+                return fromUI;
+            case 3: // just use the location with a name
+                return fromUI;
+            default: // no function, same as 1st in the file
+                return getLocation("1");
+        }
+*/
+        if (gps.length==1)
+            return getLocation(gps[0]);
+        else if (gps.length==2)
+            return fromUI;
+        else if (gps.length==3)
+            return fromUI;
+        else if (gps.length==4)
+        {
+            double lati = Double.parseDouble(gps[0]);
+            double longti = Double.parseDouble(gps[1]);
+            if( lati != 0 && longti != 0 && gps[2].matches("^[a-zA-Z]+.*")) // validated
+                addLocation( gps[0], gps[1], gps[2] );
+            return gps[0]+","+gps[1]+","+gps[2];
+        } else
+            return getLocation("1");
+    }
+
+    private String currentTarget;
+
+    private String humanReadable( double x, double precision )
+    {
+        return String.valueOf(Math.round(x/precision)*precision);
+    }
+
+    private double distance( double latitude, double longitude, double targetLatitude, double targetLongitude )
+    {
+        // https://www.movable-type.co.uk/scripts/latlong.html
+        double r = 6371e3;
+        double phi1 = Math.toRadians(targetLatitude);
+        double phi2 = Math.toRadians(latitude);
+/*
+        double lamda1 = Math.toRadians(targetLongitude);
+        double lamda2 = Math.toRadians(longitude);
+*/
+        double deltaPhi = Math.toRadians(latitude-targetLatitude);
+        double deltaLamda = Math.toRadians(longitude-targetLongitude);
+
+        double a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
+                Math.cos(phi1) * Math.cos(phi2) *
+                        Math.sin(deltaLamda/2) * Math.sin(deltaLamda/2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return r * c;
+    }
+
+    //    @Override
+    public void onLocationChanged(Location loc) {
+/*
+        editLocation.setText("");
+        pb.setVisibility(View.INVISIBLE);
+        Toast.makeText(
+                getBaseContext(),
+                "Location changed: Lat: " + loc.getLatitude() + " Lng: "
+                        + loc.getLongitude(), Toast.LENGTH_SHORT).show();
+        String longitude = "Longitude: " + loc.getLongitude();
+        Log.v(TAG, longitude);
+        String latitude = "Latitude: " + loc.getLatitude();
+        Log.v(TAG, latitude);
+*/
+        double precision = 0.00001;
+        FlowView surfaceView = (FlowView)flowFragment.getView().findViewById(R.id.wifi_surface);
+//        Button gpsView = (Button)flowFragment.getView().findViewById(requestingViewId);
+        EditText me1 = (EditText)surfaceView.getRootView().findViewById(R.id.me1);
+        TextView me2 = (TextView)surfaceView.getRootView().findViewById(R.id.me2);
+        if( locStatus<0 ) // get current location and set it in me1
+        {
+            String x = humanReadable(loc.getLatitude(), precision) +", "+humanReadable(loc.getLongitude(), precision);
+            me1.setText(x);
+            try {
+                locationManager.removeUpdates(this);
+                me2.setText("Got current location");
+            } catch (SecurityException se) {
+                me2.setText("No GPS");
+            }
+            return;
+        }
+        String target =  currentTarget==null ? (currentTarget=me1.getText().toString()) : currentTarget;
+        String [] gps = target.split(",");
+        if( gps==null || gps.length <2 ) return;
+        double targetLatitude = Double.parseDouble(gps[0]);   // 40.7725612;
+        double targetLongitude = Double.parseDouble(gps[1]);  // -74.2678638;
+        double d = distance(loc.getLatitude(), loc.getLongitude(), targetLatitude, targetLongitude );
+        Button choice = (Button)surfaceView.getRootView().findViewById(R.id.choice);
+        boolean selected = choice.getBackground()==getResources().getDrawable(R.drawable.ninepatchon);
+        String rpt = selected ? humanReadable(loc.getLatitude(), precision)+", "+humanReadable(loc.getLongitude(), precision) + " : "+humanReadable(d, 0.01) + "m to"
+                                + (gps.length>2?" "+gps[2]+",":" ")+ String.valueOf(targetLatitude)+", "+String.valueOf(targetLongitude)
+                        : humanReadable(d, 0.01) + (gps.length>2?"m to "+gps[2]:"m");
+
+        try {
+            if( locStatus == distance.length-1 ) {
+                return;
+            }
+            me2.setText(rpt);
+            while( locStatus < distance.length-1 && d < distance[locStatus] ) {
+                locStatus++;
+                if( locStatus < distance.length ) {
+                    me2.setTextColor(getResources().getColor(foreground[locStatus]));
+                    me2.setText(rpt);
+                    locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, minTime[locStatus], minDist[locStatus], this);
+                    me2.setBackgroundResource(background[locStatus]);
+                }
+                if (locStatus >= distance.length-1) {
+                    me2.setText("Arrived:"+rpt);
+                    currentTarget = null;
+                    locationManager.removeUpdates(this);
+                }
+            }
+        } catch (SecurityException se) {
+            me2.setText("No GPS");
+        }
+
+
+        // https://stackoverflow.com/questions/10893913/what-parameters-to-choose-in-gps-tracing-for-requestlocationupdates
+        // https://stackoverflow.com/questions/6302175/requestlocationupdates-parameter-android
+
+        /*------- To get city name from coordinates -------- */
+/*        String cityName = null;
+        Geocoder gcd = new Geocoder(getBaseContext(), Locale.getDefault());
+        List<Address> addresses;
+        try {
+            addresses = gcd.getFromLocation(loc.getLatitude(),
+                    loc.getLongitude(), 1);
+            if (addresses.size() > 0) {
+                System.out.println(addresses.get(0).getLocality());
+                cityName = addresses.get(0).getLocality();
+            }
+        }
+        catch (IOException e) {
+            e.printStackTrace();
+        }
+        String s = longitude + "\n" + latitude + "\n\nMy Current City is: "
+                + cityName;
+        editLocation.setText(s);*/
+    }
+
+    @Override
+    public void onProviderDisabled(String provider) {}
+
+    @Override
+    public void onProviderEnabled(String provider) {}
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {}
+
     public void onClickWifi(View view)
     {
         if( !(view instanceof Button ) ) return;
@@ -359,6 +624,86 @@ public class MainActivity extends AppCompatActivity
                 requestedNetworkType = ConnectivityManager.TYPE_MOBILE;
                 view.setBackgroundResource(R.drawable.blink);
                 startDownload();
+                break;
+            case R.id.gps:
+                requestedNetworkType = ConnectivityManager.TYPE_MOBILE;
+                locationManager = (LocationManager)getSystemService(getBaseContext().LOCATION_SERVICE);
+//                locationManager.
+                TextView me2 = (TextView)view.getRootView().findViewById(R.id.me2);
+                EditText me1 = (EditText)view.getRootView().findViewById(R.id.me1);
+                String v = me1.getText().toString();
+                if( v.equalsIgnoreCase("set"))
+                {
+                    // https://developers.google.com/maps/documentation/urls/android-intents
+                    try {
+                        me2.setBackgroundResource(background[0]);
+                        me2.setTextColor(getResources().getColor(foreground[0]));
+                        locStatus = -1;
+                        currentTarget = null;
+                        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 10, this);
+                        me2.setText("Getting current location ...");
+                    } catch (SecurityException se) {
+                        me2.setText("No GPS");
+                    }
+                    return;
+                }
+                if( v.equalsIgnoreCase("stop"))
+                {
+                    try {
+                        locationManager.removeUpdates(this);
+                        currentTarget = null;
+                        me1.setText("");
+                        me2.setText(getApplicationContext().getFilesDir().getAbsolutePath());
+                    } catch (SecurityException se) {
+                        me2.setText("No GPS");
+                    }
+                    return;
+                }
+                if( v.equalsIgnoreCase("emailwechat"))
+                {
+                    try {
+                        ShareOut( LOCATION_FILE_NAME+".txt", "FILE", "SEND_MULTIPLE_WECHAT");
+                    } catch (SecurityException se) {
+                    }
+                    return;
+                }
+                if( v.equalsIgnoreCase("email"))
+                {
+                    try {
+                        ShareOut( LOCATION_FILE_NAME+".txt", "FILE", "SEND_MULTIPLE");
+                    } catch (SecurityException se) {
+                    }
+                    return;
+                }
+                if( v.equalsIgnoreCase("send"))
+                {
+                    try {
+                        ShareOut( LOCATION_FILE_NAME+".txt", "FILE", "SEND");
+                    } catch (SecurityException se) {
+                    }
+                    return;
+                }
+                String target = locationTarget(me1);
+                me1.setText(target);
+                try {
+                    locStatus = 0;
+                    currentTarget = target;
+                    locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, minTime[locStatus], minDist[locStatus], this);
+                    view.setBackgroundResource(R.drawable.blink);
+                    me2.setBackgroundResource(R.drawable.blink);
+                    me2.setTextColor(getResources().getColor(foreground[0]));
+                    me2.setText("Monitoring ...");
+                } catch (SecurityException se) {
+                    me2.setText("No GPS");
+                }
+                // startDownload();                    TextView me2 = (TextView)view.getRootView().findViewById(R.id.me2);
+                break;
+            case R.id.choice:
+                if( view.getBackground()==getResources().getDrawable(R.drawable.ninepatchon) )
+                    view.setBackgroundResource(R.drawable.ninepatchoff);
+                else
+                    view.setBackgroundResource(R.drawable.ninepatchon);
+                break;
             default:
         }
 
@@ -376,5 +721,51 @@ public class MainActivity extends AppCompatActivity
         c.drawLine(319, 73, 500, 200, goodPaint);
         hd.unlockCanvasAndPost(c);*/
 
+    }
+
+
+    protected void ShareOut( String content, String inType, String outType ) {
+        String text = content;
+        if( inType.equalsIgnoreCase("FILE") ) {
+            AppReadFile locFile = new AppReadFile(this.getApplicationContext(), content);
+            text = locFile.all();
+        }
+        if (outType.equalsIgnoreCase("SEND_MULTIPLE")) { // plain email
+            Intent intent = new Intent(Intent.ACTION_SEND_MULTIPLE);
+            intent.setType("text/plain");
+//            intent.addCategory(Intent.CATEGORY_APP_EMAIL);
+            intent.putExtra(Intent.EXTRA_EMAIL, "me@myfamily.com");
+            intent.putExtra(Intent.EXTRA_SUBJECT, "family tree");
+            intent.putExtra(Intent.EXTRA_TEXT, text.toString());
+//            startActivity(Intent.createChooser(intent, "Send Email"));
+            startActivity(Intent.createChooser(intent, "Send Email"));
+        }
+
+        if (outType.equalsIgnoreCase("SEND_MULTIPLE_WECHAT")) {  // wechat way
+            Parcelable.Creator<String> c = Parcel.STRING_CREATOR;
+            Parcel p = Parcel.obtain();
+            p.writeString(text.toString());
+            p.setDataPosition(0);
+            String s = p.readString();
+            p.setDataPosition(0);
+            Parcelable.Creator<AppParcelable> creator = AppParcelable.CREATOR;
+            AppParcelable x = creator.createFromParcel(p);
+            ArrayList<AppParcelable> textList = new ArrayList<>();
+            textList.add(x); // Add your image URIs here
+
+            Intent shareIntent = new Intent();
+            shareIntent.setAction(Intent.ACTION_SEND_MULTIPLE);
+            shareIntent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, textList);
+            shareIntent.setType("text/plain");
+            startActivity(Intent.createChooser(shareIntent, "Share Email"));
+        }
+
+        if( outType.equalsIgnoreCase("SEND") )
+        {
+            Intent sendIntent = new Intent(Intent.ACTION_SEND);
+            sendIntent.putExtra(Intent.EXTRA_TEXT, text);
+            sendIntent.setType("text/plain");
+            startActivity(sendIntent);
+        }
     }
 }
